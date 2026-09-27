@@ -20,17 +20,18 @@ TARGET_CHAT_ID = -1004353435844
 
 completed_dates = set()
 
-# --- МІНІ-СЕРВЕР FLASK ДЛЯ RENDER ---
+# --- СТАБІЛЬНИЙ МІНІ-СЕРВЕР FLASK ДЛЯ RENDER ---
 app_flask = Flask(__name__)
 
 @app_flask.route("/")
 def home():
-    return "Bot is alive and running 24/7!"
+    return "Bot is alive and running 24/7!", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
-    app_flask.run(host="0.0.0.0", port=port)
-# ------------------------------------
+    # Використовуємо параметри для стабільності на хостингу
+    app_flask.run(host="0.0.0.0", port=port, use_reloader=False)
+# ---------------------------------------------
 
 async def start(command_update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = command_update.effective_chat.id
@@ -86,21 +87,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_name = query.from_user.first_name
 
         await query.edit_message_text(
-            text=f"✅ **Сміття на {date_str} успішно вивезено!**\n(Відзначив(la): {user_name}) Дякуємо!",
+            text=f"✅ **Сміття на {date_str} успішно вивезено!**\n(Відзначив(ла): {user_name}) Дякуємо!",
             parse_mode="Markdown"
         )
 
 async def check_immediate_reminders(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Перевіряє при запуску: якщо сьогодні або завтра є дата вивозу, 
-    одразу надсилає сповіщення в групу!
-    """
     tz = pytz.timezone("Europe/Berlin")
     now_local = datetime.now(tz)
     today_str = now_local.date().strftime("%d.%m.%Y")
     tomorrow_str = (now_local.date() + timedelta(days=1)).strftime("%d.%m.%Y")
 
-    # Перевірка на сьогодні (щоб одразу прийшло нагадування про 28.09)
     if today_str in WASTE_SCHEDULE:
         info = WASTE_SCHEDULE[today_str]
         await send_reminder_message(
@@ -111,7 +107,6 @@ async def check_immediate_reminders(context: ContextTypes.DEFAULT_TYPE):
             "Сьогоднішнє термінове нагадування"
         )
 
-    # Перевірка на завтра
     if tomorrow_str in WASTE_SCHEDULE:
         info = WASTE_SCHEDULE[tomorrow_str]
         await send_reminder_message(
@@ -128,7 +123,6 @@ def schedule_jobs(application: Application):
 
     for date_str, info in WASTE_SCHEDULE.items():
         try:
-            # Очищаємо дату від додаткових індексів на кшталт "(2)" для парсингу
             clean_date_str = date_str.split(" ")[0]
             collection_date = datetime.strptime(clean_date_str, "%d.%m.%Y").date()
             reminder_date = collection_date - timedelta(days=1)
@@ -165,6 +159,7 @@ def schedule_jobs(application: Application):
             logger.error(f"Помилка планування для дати {date_str}: {e}")
 
 def main():
+    # Запускаємо Flask у фоновому потоці
     t = Thread(target=run_flask)
     t.daemon = True
     t.start()
@@ -176,10 +171,9 @@ def main():
 
     schedule_jobs(application)
     
-    # Запускаємо миттєву перевірку при стартові
     application.job_queue.run_once(check_immediate_reminders, when=2)
 
-    print("Бот успішно запущено!")
+    print("Бот та вебсервер успішно запущені!")
     application.run_polling()
 
 if __name__ == "__main__":
