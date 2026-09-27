@@ -1,0 +1,148 @@
+import logging
+import pytz
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from schedule import WASTE_SCHEDULE
+
+# Налаштування логування
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Токен бота
+TOKEN = "8868034368:AAE14z1B8UMS13gZiigmsKhuaqPcMQUpvpY"
+
+# ID чату: зараз стоїть твій для тестів. 
+# Коли захочеш перенести в групу, просто зміни на: -1004353435844
+TARGET_CHAT_ID = -1004353435844  
+
+completed_dates = set()
+
+async def start(command_update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = command_update.effective_chat.id
+    await command_update.message.reply_text(
+        f"Привіт! Бот нагадувань для Wenggasse активний.\n"
+        f"ID цього чату: `{chat_id}`",
+        parse_mode="Markdown"
+    )
+
+async def send_reminder_message(bot, date_str, waste_type, tag_info, time_label):
+    if date_str in completed_dates:
+        return
+
+    message = (
+        f"🔔 **Нагадування про вивіз сміття! ({time_label})**\n\n"
+        f"📅 **Дата вивозу:** {date_str}\n"
+        f"🗑 **Що виносимо:** {waste_type}\n"
+        f"👤 **Черговий(а):** **{tag_info}**\n\n"
+        f"*Будь ласка, підготуйте баки та не забудьте винести!*"
+    )
+
+    keyboard = [[InlineKeyboardButton("✅ Сміття вивезено", callback_data=f"done_{date_str}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        await bot.send_message(
+            chat_id=TARGET_CHAT_ID,
+            text=message,
+            parse_mode="HTML",
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.error(f"Помилка надсилання повідомлення: {e}")
+
+async def scheduled_reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data
+    await send_reminder_message(
+        context.bot, 
+        data["date"], 
+        data["waste_type"], 
+        data["tag"], 
+        data["time_label"]
+    )
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if data.startswith("done_"):
+        date_str = data.split("_", 1)[1]
+        completed_dates.add(date_str)
+        user_name = query.from_user.first_name
+
+        await query.edit_message_text(
+            text=f"✅ **Сміття на {date_str} успішно вивезено!**\n(Відзначив(ла): {user_name}) Дякуємо!",
+            parse_mode="Markdown"
+        )
+
+async def check_immediate_reminders(context: ContextTypes.DEFAULT_TYPE):
+    tz = pytz.timezone("Europe/Berlin")
+    now_local = datetime.now(tz)
+    tomorrow_str = (now_local.date() + timedelta(days=1)).strftime("%d.%m.%Y")
+
+    if tomorrow_str in WASTE_SCHEDULE:
+        info = WASTE_SCHEDULE[tomorrow_str]
+        await send_reminder_message(
+            context.bot, 
+            tomorrow_str, 
+            info["type"], 
+            info["tag"], 
+            "Сьогоднішнє сповіщення на завтра (при запуску)"
+        )
+
+def schedule_jobs(application: Application):
+    tz = pytz.timezone("Europe/Berlin")
+    job_queue = application.job_queue
+
+    for date_str, info in WASTE_SCHEDULE.items():
+        try:
+            collection_date = datetime.strptime(date_str, "%d.%m.%Y").date()
+            reminder_date = collection_date - timedelta(days=1)
+            
+            if reminder_date < datetime.now(tz).date():
+                continue
+
+            waste_type = info["type"]
+            tag_info = info["tag"]
+
+            times = [
+                (10, 0, "Ранкове нагадування"),
+                (14, 0, "Денне нагадування"),
+                (19, 0, "Вечірнє нагадування")
+            ]
+
+            for hour, minute, label in times:
+                run_time = datetime(
+                    reminder_date.year, reminder_date.month, reminder_date.day,
+                    hour, minute, 0, tzinfo=tz
+                )
+
+                job_queue.run_once(
+                    scheduled_reminder_job,
+                    when=run_time,
+                    data={
+                        "date": date_str,
+                        "waste_type": waste_type,
+                        "tag": tag_info,
+                        "time_label": label
+                    }
+                )
+        except Exception as e:
+            logger.error(f"Помилка планування для дати {date_str}: {e}")
+
+def main():
+    application = Application.builder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+    schedule_jobs(application)
+    
+    application.job_queue.run_once(check_immediate_reminders, when=2)
+
+    print("Бот успішно запущено та готовий до роботи з новими тегами!")
+    application.run_polling()
+
+if __name__ == "__main__":
+    main()
