@@ -1,6 +1,9 @@
 import logging
 import pytz
+import os
 from datetime import datetime, timedelta
+from threading import Thread
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from schedule import WASTE_SCHEDULE
@@ -12,11 +15,22 @@ logger = logging.getLogger(__name__)
 # Токен бота
 TOKEN = "8868034368:AAE14z1B8UMS13gZiigmsKhuaqPcMQUpvpY"
 
-# ID чату: зараз стоїть твій для тестів. 
-# Коли захочеш перенести в групу, просто зміни на: -1004353435844
+# Груповий ID чату
 TARGET_CHAT_ID = -1004353435844  
 
 completed_dates = set()
+
+# --- МІНІ-СЕРВЕР FLASK ДЛЯ RENDER (щоб бот не засинав) ---
+app_flask = Flask(__name__)
+
+@app_flask.route("/")
+def home():
+    return "Bot is alive and running 24/7!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_flask.run(host="0.0.0.0", port=port)
+# ---------------------------------------------------------
 
 async def start(command_update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = command_update.effective_chat.id
@@ -132,6 +146,11 @@ def schedule_jobs(application: Application):
             logger.error(f"Помилка планування для дати {date_str}: {e}")
 
 def main():
+    # Запускаємо Flask у фоновому потоці, щоб Render бачив вебсервер
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -141,7 +160,7 @@ def main():
     
     application.job_queue.run_once(check_immediate_reminders, when=2)
 
-    print("Бот успішно запущено та готовий до роботи з новими тегами!")
+    print("Бот успішно запущено та готовий до роботи 24/7!")
     application.run_polling()
 
 if __name__ == "__main__":
